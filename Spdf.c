@@ -13,7 +13,10 @@
 #define BUF_SIZE 1024
 
 void handle_client(int client_sock);
+void handle_rmfile(const char *filename);
+void handle_ufile(const char *filename, const char *dest_path, const char *file_content, int client_sock);
 int make_dirs(const char *path);
+void handle_dfile(const char *filename, int client_sock);
 
 int main() {
     int server_sock, client_sock;
@@ -76,28 +79,67 @@ int main() {
 void handle_client(int client_sock) {
     char buffer[BUF_SIZE];
     ssize_t n;
+
+    // Receive the command from the client
+    n = recv(client_sock, buffer, BUF_SIZE, 0);
+    if (n <= 0) {
+        if (n == 0) {
+            printf("Client disconnected before sending command\n");
+        } else {
+            perror("Recv error (command)");
+        }
+        close(client_sock);
+        return;
+    }
+    buffer[n] = '\0';
+    printf("Received command: %s\n", buffer);
+
+    // Handle the "dfile" command
+    if (strncmp(buffer, "dfile ", 6) == 0) {
+        char *received_filename = buffer + 6;
+
+        // Trim any newline characters
+        received_filename[strcspn(received_filename, "\n")] = 0;
+
+        // Handle the file download request
+        handle_dfile(received_filename, client_sock);
+    }
+
+    // Check if the command is rmfile
+    else if (strncmp(buffer, "rmfile ", 7) == 0) {
+        char *received_filename = buffer + 7;
+        handle_rmfile(received_filename);
+    } else {
+        // Parse ufile command
+        char *received_filename = strtok(buffer, "\n");
+        char *received_dest_path = strtok(NULL, "\n");
+        char *received_file_content = strtok(NULL, "\0");  // Capture the remaining content as file content
+
+        if (!received_filename || !received_dest_path) {
+            printf("Invalid command format\n");
+            close(client_sock);
+            return;
+        }
+
+        handle_ufile(received_filename, received_dest_path, received_file_content, client_sock);
+    }
+
+    close(client_sock);
+}
+
+void handle_rmfile(const char *filename) {
+    // Perform the file deletion
+    if (remove(filename) == 0) {
+        printf("File '%s' deleted successfully.\n", filename);
+    } else {
+        perror("File deletion error");
+    }
+}
+
+void handle_ufile(const char *filename, const char *dest_path, const char *file_content, int client_sock) {
+    char buffer[BUF_SIZE];
+    ssize_t n;
     FILE *file;
-    char dest_path[BUF_SIZE];
-    char filename[BUF_SIZE];
-
-    // Receive destination path
-    n = recv(client_sock, dest_path, BUF_SIZE, 0);
-    if (n <= 0) {
-        perror("Recv error");
-        return;
-    }
-    dest_path[n] = '\0';
-
-    // Receive filename
-    n = recv(client_sock, filename, BUF_SIZE, 0);
-    if (n <= 0) {
-        perror("Recv error");
-        return;
-    }
-    filename[n] = '\0';
-
-    // Print received message
-    printf("Request received to store file '%s' in directory '%s'\n", filename, dest_path);
 
     // Create the directory if it doesn't exist
     if (make_dirs(dest_path) != 0) {
@@ -113,20 +155,39 @@ void handle_client(int client_sock) {
         perror("File open error");
         return;
     }
+    printf("Opened file for writing: %s\n", fullpath);
 
-    // Receive file data
+    // Write the initially received file content if any
+    if (file_content) {
+        size_t content_len = strlen(file_content);
+        size_t written = fwrite(file_content, 1, content_len, file);
+        if (written != content_len) {
+            perror("fwrite error");
+            fclose(file);
+            return;
+        }
+        fflush(file);
+    }
+
+    // Receive and write additional file data
     while ((n = recv(client_sock, buffer, BUF_SIZE, 0)) > 0) {
-        fwrite(buffer, 1, n, file);
+        printf("Writing %ld bytes to file\n", n);  // Debug statement
+        printf("File content: %.*s\n", (int)n, buffer);  // Print file content
+        size_t written = fwrite(buffer, 1, n, file);
+        if (written != n) {
+            perror("fwrite error");
+            break;
+        }
+        fflush(file);  // Ensure data is written to the file immediately
     }
 
     if (n < 0) {
-        perror("Recv error");
+        perror("Recv error (file data)");
+    } else {
+        printf("File '%s' successfully stored in directory '%s'\n", filename, dest_path);
     }
 
     fclose(file);
-
-    // Print success message
-    printf("File '%s' successfully stored in directory '%s'\n", filename, dest_path);
 }
 
 int make_dirs(const char *path) {
@@ -151,4 +212,36 @@ int make_dirs(const char *path) {
         return -1;
     }
     return 0;
+}
+
+void handle_dfile(const char *filename, int client_sock) {
+    FILE *file = fopen(filename, "rb");
+    if (file == NULL) {
+        perror("File open error");
+        return;
+    }
+
+    char buffer[BUF_SIZE];
+    ssize_t n;
+
+    // Read and send the file content to the client
+    while ((n = fread(buffer, 1, BUF_SIZE, file)) > 0) {
+        if (send(client_sock, buffer, n, 0) == -1) {
+            perror("Send error");
+            break;
+        }
+        memset(buffer, 0, BUF_SIZE);  // Clear buffer after each send
+    }
+
+    if (n < 0) {
+        perror("fread error");
+    }
+
+    // Ensure all data is sent before closing
+    if (shutdown(client_sock, SHUT_WR) == -1) {
+        perror("Shutdown error");
+    }
+
+    fclose(file);
+    printf("File '%s' sent to client.\n", filename);
 }
