@@ -8,15 +8,19 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <sys/wait.h>
 
-#define PORT 8086
+
+#define PORT 9800
 #define BUF_SIZE 1024
 
 void handle_client(int client_sock);
-void handle_rmfile(const char *filename);
+void handle_rmfile(const char *filename, int client_sock);
 void handle_ufile(const char *filename, const char *dest_path, const char *file_content, int client_sock);
 int make_dirs(const char *path);
 void handle_dfile(const char *filename, int client_sock);
+void handle_dtar(int client_sock);
+void handle_display(const char *directory, int client_sock);
 
 int main() {
     int server_sock, client_sock;
@@ -100,11 +104,20 @@ void handle_client(int client_sock) {
         // Trim any newline characters
         received_filename[strcspn(received_filename, "\n")] = 0;
 
-        // Handle the file download request
-        handle_dfile(received_filename, client_sock);
-    } else if (strncmp(buffer, "rmfile ", 7) == 0) {
+        // If the request is for pdf.tar, ensure it is created before sending
+        if (strcmp(received_filename, "text.tar") == 0) {
+            handle_dtar(client_sock);
+        } else {
+            handle_dfile(received_filename, client_sock);
+        }
+
+    }else if (strncmp(buffer, "display", 7) == 0) {
+    char *directory = buffer + 8;
+    handle_display(directory, client_sock);
+    }
+     else if (strncmp(buffer, "rmfile ", 7) == 0) {
         char *received_filename = buffer + 7;
-        handle_rmfile(received_filename);
+        handle_rmfile(received_filename, client_sock);
     } else {
         // Parse ufile command
         char *received_filename = strtok(buffer, "\n");
@@ -122,15 +135,21 @@ void handle_client(int client_sock) {
     close(client_sock);
 }
 
+void handle_rmfile(const char *filename, int client_sock) {
+    char response[BUF_SIZE];
 
-void handle_rmfile(const char *filename) {
     // Perform the file deletion
     if (remove(filename) == 0) {
+        snprintf(response, BUF_SIZE, "File '%s' deleted successfully.\n", filename);
         printf("File '%s' deleted successfully.\n", filename);
     } else {
-        perror("File deletion error");
+        snprintf(response, BUF_SIZE, "File deletion error: %s\n", strerror(errno));
     }
+
+    // Send the response back to the client
+    send(client_sock, response, strlen(response), 0);
 }
+
 
 void handle_ufile(const char *filename, const char *dest_path, const char *file_content, int client_sock) {
     char buffer[BUF_SIZE];
@@ -211,6 +230,14 @@ int make_dirs(const char *path) {
 }
 
 void handle_dfile(const char *filename, int client_sock) {
+
+    if (access(filename, F_OK) == -1) {
+        char response[BUF_SIZE];
+        snprintf(response, BUF_SIZE, "Error: File/Directory does not exist.\n");
+        send(client_sock, response, strlen(response), 0);
+        return;
+    }
+    
     FILE *file = fopen(filename, "rb");
     if (file == NULL) {
         perror("File open error");
@@ -240,4 +267,108 @@ void handle_dfile(const char *filename, int client_sock) {
 
     fclose(file);
     printf("File '%s' sent to Smain.\n", filename);
+}
+
+void handle_dtar(int client_sock) {
+    char command[BUF_SIZE];
+    char home_dir[BUF_SIZE];
+    int pipefd[2];
+    pid_t pid;
+
+    // Get the user's home directory
+    const char *home = getenv("HOME");
+    if (!home) {
+        perror("Unable to get the home directory");
+        return;
+    }
+
+    // Construct the path to the stext directory under the home directory
+    snprintf(home_dir, sizeof(home_dir), "%s/stext", home);
+
+    // Create the command to tar all .txt files in the ~/stext directory
+    snprintf(command, BUF_SIZE, "cd %s && tar -cvf - $(find . -type f -name '*.txt')", home_dir);
+
+    // Create a pipe to capture the output of the tar command
+    if (pipe(pipefd) == -1) {
+        perror("pipe error");
+        return;
+    }
+
+    // Fork a process to run the tar command
+    if ((pid = fork()) == -1) {
+        perror("fork error");
+        return;
+    } else if (pid == 0) {
+        // Child process: Run the tar command
+        close(pipefd[0]);  // Close the read end of the pipe
+        dup2(pipefd[1], STDOUT_FILENO);  // Redirect stdout to the pipe
+        close(pipefd[1]);  // Close the write end after redirect
+
+        execl("/bin/sh", "sh", "-c", command, (char *)NULL);
+        perror("execl error");  // If execl fails
+        exit(EXIT_FAILURE);
+    } else {
+        // Parent process: Read the tar output from the pipe and send it over the socket
+        close(pipefd[1]);  // Close the write end of the pipe
+
+        char buffer[BUF_SIZE];
+        ssize_t n;
+
+        // Read the tar output and send it to the client
+        while ((n = read(pipefd[0], buffer, BUF_SIZE)) > 0) {
+            if (send(client_sock, buffer, n, 0) == -1) {
+                perror("send error");
+                break;
+            }
+        }
+
+        if (n < 0) {
+            perror("read error");
+        }
+
+        close(pipefd[0]);  // Close the read end of the pipe
+        wait(NULL);  // Wait for the child process to finish
+    }
+
+    // Properly shut down the connection after sending all data
+    shutdown(client_sock, SHUT_WR);
+    printf("Tar file sent to client directly from %s directory.\n", home_dir);
+}
+
+
+void handle_display(const char *directory, int client_sock) {
+    char buffer[BUF_SIZE];
+    char cmd[BUF_SIZE];
+    FILE *fp;
+
+    // Debug: Print the directory being searched
+    printf("Searching for .pdf files in directory: %s\n", directory);
+
+    // Construct the command to find .pdf files in the specified directory
+    snprintf(cmd, sizeof(cmd), "find %s -type f -name '*.txt'", directory);
+    
+    // Debug: Print the command being executed
+    printf("Executing command: %s\n", cmd);
+
+    fp = popen(cmd, "r");
+    if (fp == NULL) {
+        perror("Failed to run command");
+        close(client_sock);
+        return;
+    }
+
+    // Read the file names and send them to Smain
+    while (fgets(buffer, sizeof(buffer), fp) != NULL) {
+        send(client_sock, buffer, strlen(buffer), 0);
+        // Debug: Print each file sent
+        printf("Sending file: %s", buffer);
+    }
+
+    pclose(fp);
+
+    // Properly close the write side of the socket to signal end of data
+    shutdown(client_sock, SHUT_WR);
+
+    // Debug: Indicate that the display command has been handled
+    printf("Completed handling display command and sent file list.\n");
 }
