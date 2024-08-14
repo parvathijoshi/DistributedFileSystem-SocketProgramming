@@ -1,3 +1,9 @@
+// COMP 8567 - Advanced Systems Programming
+// Final Project - Distributed File System using Socket Programming
+// Team members: 
+// Parvathi Puthedath Joshy -110146653
+// Ardra Sanjiv Kumar - 110129179
+//------------------------------------------------------------------
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,19 +16,16 @@
 #include <errno.h>
 #include <sys/wait.h>
 
-
 #define PORT 9801
 #define BUF_SIZE 1024
 
-void handle_client(int client_sock);
-void handle_rmfile(const char *filename, int client_sock);
-void handle_ufile(const char *filename, const char *dest_path, const char *file_content, int client_sock);
-int make_dirs(const char *path);
-void handle_dfile(const char *filename, int client_sock);
-void handle_dtar(int client_sock);
-void retrieve_and_send_file(const char *filename, int client_sock);
-void handle_display(const char *directory, int client_sock);
-
+void handleCommandsfromClient(int client_sock);
+void rmfileCommandExecution(const char *filename, int client_sock);
+void ufileCommandExecution(const char *filename, const char *dest_path, const char *file_content, int client_sock);
+int createDir(const char *path);
+void dfileCommandExecution(const char *filename, int client_sock);
+void dtarCommandExecution(int client_sock);
+void displayCommandExecution(const char *directory, int client_sock);
 
 int main() {
     int server_sock, client_sock;
@@ -66,7 +69,7 @@ int main() {
         // Fork a child process to handle the client
         if ((child_pid = fork()) == 0) {
             close(server_sock);
-            handle_client(client_sock);
+            handleCommandsfromClient(client_sock);
             close(client_sock);
             exit(0);
         } else if (child_pid < 0) {
@@ -82,7 +85,7 @@ int main() {
     return 0;
 }
 
-void handle_client(int client_sock) {
+void handleCommandsfromClient(int client_sock) {
     char buffer[BUF_SIZE];
     ssize_t n;
 
@@ -109,22 +112,22 @@ void handle_client(int client_sock) {
 
         // If the request is for pdf.tar, ensure it is created before sending
         if (strcmp(received_filename, "pdf.tar") == 0) {
-            handle_dtar(client_sock);
+            dtarCommandExecution(client_sock);
         } else {
-            handle_dfile(received_filename, client_sock);
+            dfileCommandExecution(received_filename, client_sock);
         }
     }
     else if (strncmp(buffer, "dtar ", 5) == 0) {
         // Handle the dtar command
-        handle_dtar(client_sock);
+        dtarCommandExecution(client_sock);
     }
     else if (strncmp(buffer, "display", 7) == 0) {
         char *directory = buffer + 8;
-        handle_display(directory, client_sock);
+        displayCommandExecution(directory, client_sock);
     }
     else if (strncmp(buffer, "rmfile ", 7) == 0) {
         char *received_filename = buffer + 7;
-        handle_rmfile(received_filename,client_sock);
+        rmfileCommandExecution(received_filename,client_sock);
     } else {
         // Parse ufile command
         char *received_filename = strtok(buffer, "\n");
@@ -137,18 +140,18 @@ void handle_client(int client_sock) {
             return;
         }
 
-        handle_ufile(received_filename, received_dest_path, received_file_content, client_sock);
+        ufileCommandExecution(received_filename, received_dest_path, received_file_content, client_sock);
     }
 
     close(client_sock);
 }
 
-void handle_rmfile(const char *filename, int client_sock) {
+void rmfileCommandExecution(const char *filename, int client_sock) {
     char response[BUF_SIZE];
     
     // Perform the file deletion
     if (remove(filename) == 0) {
-        snprintf(response, BUF_SIZE, "File '%s' deleted successfully from Spdf server.\n", filename);
+        snprintf(response, BUF_SIZE, "File is deleted successfully.\n");
         printf("File '%s' deleted successfully.\n", filename);
     } else {
         snprintf(response, BUF_SIZE, "File deletion error: %s\n", strerror(errno));
@@ -158,14 +161,13 @@ void handle_rmfile(const char *filename, int client_sock) {
     send(client_sock, response, strlen(response), 0);
 }
 
-
-void handle_ufile(const char *filename, const char *dest_path, const char *file_content, int client_sock) {
+void ufileCommandExecution(const char *filename, const char *dest_path, const char *file_content, int client_sock) {
     char buffer[BUF_SIZE];
     ssize_t n;
     FILE *file;
 
     // Create the directory if it doesn't exist
-    if (make_dirs(dest_path) != 0) {
+    if (createDir(dest_path) != 0) {
         perror("mkdir error");
         return;
     }
@@ -213,7 +215,7 @@ void handle_ufile(const char *filename, const char *dest_path, const char *file_
     fclose(file);
 }
 
-int make_dirs(const char *path) {
+int createDir(const char *path) {
     char tmp[BUF_SIZE];
     char *p = NULL;
     size_t len;
@@ -237,7 +239,7 @@ int make_dirs(const char *path) {
     return 0;
 }
 
-void handle_dfile(const char *filename, int client_sock) {
+void dfileCommandExecution(const char *filename, int client_sock) {
 
     if (access(filename, F_OK) == -1) {
         char response[BUF_SIZE];
@@ -278,7 +280,7 @@ void handle_dfile(const char *filename, int client_sock) {
     printf("File '%s' sent to client.\n", filename);
 }
 
-void handle_dtar(int client_sock) {
+void dtarCommandExecution(int client_sock) {
     char command[BUF_SIZE];
     char home_dir[BUF_SIZE];
     int pipefd[2];
@@ -343,8 +345,7 @@ void handle_dtar(int client_sock) {
     printf("Tar file sent to client directly from %s directory.\n", home_dir);
 }
 
-
-void handle_display(const char *directory, int client_sock) {
+void displayCommandExecution(const char *directory, int client_sock) {
     char buffer[BUF_SIZE];
     char cmd[BUF_SIZE];
     FILE *fp;

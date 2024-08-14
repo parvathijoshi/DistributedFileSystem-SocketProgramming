@@ -1,3 +1,9 @@
+// COMP 8567 - Advanced Systems Programming
+// Final Project - Distributed File System using Socket Programming
+// Team members: 
+// Parvathi Puthedath Joshy -110146653
+// Ardra Sanjiv Kumar - 110129179
+//------------------------------------------------------------------
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,17 +16,17 @@
 #include <pwd.h>
 #include <unistd.h>
 
-#define PORT 9675
+#define PORT 9678
 #define BUF_SIZE 1024
 
-int connect_to_server();  // Function prototype
-
-void upload_file(int sock, const char *filename, const char *dest_path);
-void download_file(int sock, const char *filename);
-void request_tar_file(int sock, const char *filetype);
-void request_display(int sock, const char *pathname);
-void expand_tilde(char *path, char *expanded_path, size_t size);
-int validate_command(const char *command);
+int connectToServer(); 
+void uploadFile(int sock, const char *filename, const char *dest_path);
+void downloadFile(int sock, const char *filename);
+void tarFile(int sock, const char *filetype);
+void displayFiles(int sock, const char *pathname);
+void tildePathOperation(char *path, char *expanded_path, size_t size);
+int validateCommands(const char *command);
+void trimLeadingWhiteSpaces(char *str);
 
 int main() {
     int sock;
@@ -43,7 +49,7 @@ int main() {
 
     // Connect to Smain server
     if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        printf("Connection closed");
+        printf("Connection refused. Closing..\n");
         close(sock);
         exit(EXIT_FAILURE);
     }
@@ -51,7 +57,7 @@ int main() {
     printf("Connected to Smain server\n");
 
     while (1) {
-        int sock = connect_to_server();
+        int sock = connectToServer();
         if (sock == -1) {
             printf("Could not connect to server.\n");
             exit(EXIT_FAILURE);
@@ -60,19 +66,22 @@ int main() {
         fgets(buffer, BUF_SIZE, stdin);
         buffer[strcspn(buffer, "\n")] = '\0'; // Remove newline character
 
+        // Trim leading white spaces before the command
+        trimLeadingWhiteSpaces(buffer);
+
         // Validate the command before sending it to the server
-        if (!validate_command(buffer)) {
+        if (!validateCommands(buffer)) {
             close(sock);
             continue; // Skip this iteration if the command is invalid
         }
 
         if (strncmp(buffer, "ufile ", 6) == 0) {
-            // int sock = connect_to_server(); // Reconnect for each command
+            // int sock = connectToServer(); // Reconnect for each command
             // if (sock == -1) continue;
             char *filename = strtok(buffer + 6, " ");
             char *dest_path = strtok(NULL, " ");
             if (filename && dest_path) {
-                upload_file(sock, filename, dest_path);
+                uploadFile(sock, filename, dest_path);
             } else {
                 printf("Invalid command format\n");
             }
@@ -87,12 +96,12 @@ int main() {
             }
 
         } else if (strncmp(buffer, "dfile ", 6) == 0) {
-        int sock = connect_to_server(); // Reconnect for each command
+        int sock = connectToServer(); // Reconnect for each command
         if (sock == -1) continue;
 
         char *filename = buffer + 6;
         if (filename) {
-            download_file(sock, filename);
+            downloadFile(sock, filename);
         } else {
             printf("Invalid command format\n");
         }
@@ -100,17 +109,17 @@ int main() {
 
         }else if (strncmp(buffer, "dtar ", 5) == 0) {
 
-        int sock = connect_to_server(); // Reconnect for each command
+        int sock = connectToServer(); // Reconnect for each command
         if (sock == -1) continue;
         char *filetype = buffer + 5;
-        request_tar_file(sock, filetype);
+        tarFile(sock, filetype);
         }
         else if (strncmp(buffer, "display ", 8) == 0) {
-            int sock = connect_to_server(); // Reconnect for each command
+            int sock = connectToServer(); // Reconnect for each command
             if (sock == -1) continue;
             char *pathname = buffer + 8;
             if (pathname) {
-                request_display(sock, pathname);
+                displayFiles(sock, pathname);
             } else {
                 printf("Invalid command format\n");
             }
@@ -124,7 +133,7 @@ int main() {
     return 0;
 }
 
-int connect_to_server() {
+int connectToServer() {
     int sock;
     struct sockaddr_in server_addr;
 
@@ -152,25 +161,37 @@ int connect_to_server() {
     return sock;
 }
 
+// Function to trim leading spaces
+void trimLeadingWhiteSpaces(char *str) {
+    char *start = str;
 
-void upload_file(int sock, const char *filename, const char *dest_path) {
+    // Trim leading spaces
+    while (*start == ' ') {
+        start++;
+    }
+
+    // Shift all characters back to the start of the string
+    memmove(str, start, strlen(start) + 1);
+}
+
+void uploadFile(int sock, const char *filename, const char *dest_path) {
     char buffer[BUF_SIZE];
     char expanded_dest_path[BUF_SIZE];
     FILE *file;
     size_t n;
 
     // Expand ~ in the destination path
-    expand_tilde((char *)dest_path, expanded_dest_path, BUF_SIZE);
+    tildePathOperation((char *)dest_path, expanded_dest_path, BUF_SIZE);
 
     // Check if the file exists before sending the command to the server
     if (access(filename, F_OK) == -1) {
-        printf("Error: File or folder '%s' does not exist.\n", filename);
+        printf("Error: File '%s' does not exist.\n", filename);
         return;
     }
 
     snprintf(buffer, BUF_SIZE, "ufile\n%s\n%s\n", filename, expanded_dest_path);
     send(sock, buffer, strlen(buffer), 0);
-    printf("Sent command: %s %s\n", filename, expanded_dest_path);
+    //printf("Sent command: %s %s\n", filename, expanded_dest_path);
 
     if ((file = fopen(filename, "rb")) == NULL) {
         perror("File open error");
@@ -180,18 +201,19 @@ void upload_file(int sock, const char *filename, const char *dest_path) {
     while ((n = fread(buffer, 1, BUF_SIZE, file)) > 0) {
         send(sock, buffer, n, 0);
     }
+    printf("File '%s' is successfully uploaded\n",filename);
 
     fclose(file);
     shutdown(sock, SHUT_WR); // Close the write side of the socket to signal EOF
 }
 
-void download_file(int sock, const char *filename) {
+void downloadFile(int sock, const char *filename) {
     char buffer[BUF_SIZE];
     char expanded_filename[BUF_SIZE];
     ssize_t n;
 
     // Expand ~ in the filename path
-    expand_tilde((char *)filename, expanded_filename, BUF_SIZE);
+    tildePathOperation((char *)filename, expanded_filename, BUF_SIZE);
 
     // Send the dfile command to the server
     snprintf(buffer, BUF_SIZE, "dfile %s", expanded_filename);
@@ -251,9 +273,7 @@ void download_file(int sock, const char *filename) {
     close(sock);
 }
 
-
-
-void request_tar_file(int sock, const char *filetype) {
+void tarFile(int sock, const char *filetype) {
     char buffer[BUF_SIZE];
     ssize_t n;
 
@@ -300,7 +320,7 @@ void request_tar_file(int sock, const char *filetype) {
     close(sock);
 }
 
-void request_display(int sock, const char *pathname) {
+void displayFiles(int sock, const char *pathname) {
     char buffer[BUF_SIZE];
     char expanded_pathname[BUF_SIZE];
     ssize_t n;
@@ -308,7 +328,14 @@ void request_display(int sock, const char *pathname) {
     int files_found = 0;  // Variable to track if any files are found
 
     // Expand ~ in the pathname
-    expand_tilde((char *)pathname, expanded_pathname, BUF_SIZE);
+    tildePathOperation((char *)pathname, expanded_pathname, BUF_SIZE);
+
+    // Trim trailing slash, if present
+    size_t path_len = strlen(expanded_pathname);
+    if (path_len > 1 && expanded_pathname[path_len - 1] == '/') {
+        expanded_pathname[path_len - 1] = '\0';
+    }
+    
     base_len = strlen(expanded_pathname);
 
     // Send the display command to the server
@@ -327,21 +354,16 @@ void request_display(int sock, const char *pathname) {
                 files_found = 1;
             }
 
+            // Check if the line starts with the expanded pathname or spdf/stext and remove the base path accordingly
             if (strncmp(line, expanded_pathname, base_len) == 0) {
                 // Print only the part after the base path
                 printf("%s\n", line + base_len + 1);  // +1 to remove the leading slash
             } else if (strstr(line, "/spdf/") != NULL) {
-                // Handle spdf files
-                char *spdf_base = strstr(line, "/spdf/");
-                if (spdf_base) {
-                    printf("%s\n", spdf_base + 6);  // +6 to remove "/spdf/"
-                }
+                // Print the part after the base path and remove "/spdf/"
+                printf("%s\n", line + base_len);
             } else if (strstr(line, "/stext/") != NULL) {
-                // Handle stext files
-                char *stext_base = strstr(line, "/stext/");
-                if (stext_base) {
-                    printf("%s\n", stext_base + 7);  // +7 to remove "/stext/"
-                }
+                // Print the part after the base path and remove "/stext/"
+                printf("%s\n", line + base_len + 1);
             } else {
                 // If the line doesn't match any base path, just print it
                 printf("%s\n", line);
@@ -365,7 +387,7 @@ void request_display(int sock, const char *pathname) {
 }
 
 // Function to expand ~ to the user's home directory
-void expand_tilde(char *path, char *expanded_path, size_t size) {
+void tildePathOperation(char *path, char *expanded_path, size_t size) {
     if (path[0] == '~') {
         const char *home_dir = getenv("HOME");
         if (!home_dir) {
@@ -378,7 +400,7 @@ void expand_tilde(char *path, char *expanded_path, size_t size) {
     }
 }
 
-int validate_command(const char *command) {
+int validateCommands(const char *command) {
     char buffer[BUF_SIZE];
     strncpy(buffer, command, BUF_SIZE);
 
@@ -495,14 +517,14 @@ int validate_command(const char *command) {
             return 0;
         }
 
-        // Validate file extension
-        char *ext = strrchr(pathname, '.');
-        if (ext && strcmp(ext, ".c") != 0 && strcmp(ext, ".pdf") != 0 && strcmp(ext, ".txt") != 0) {
-            printf("Invalid extension. Only .c, .pdf, and .txt are allowed.\n");
-            return 0;
-        }
+        // // Validate file extension
+        // char *ext = strrchr(pathname, '.');
+        // if (ext && strcmp(ext, ".c") != 0 && strcmp(ext, ".pdf") != 0 && strcmp(ext, ".txt") != 0) {
+        //     printf("Invalid path or Invalid extension. Please note that only .c, .pdf, and .txt are allowed.\n");
+        //     return 0;
+        // }
     } else {
-        printf("Unknown command\n");
+        printf("Unknown command. Please enter a valid command.\n");
         return 0;
     }
 

@@ -1,3 +1,9 @@
+// COMP 8567 - Advanced Systems Programming
+// Final Project - Distributed File System using Socket Programming
+// Team members: 
+// Parvathi Puthedath Joshy -110146653
+// Ardra Sanjiv Kumar - 110129179
+//------------------------------------------------------------------
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,44 +18,48 @@
 #include <pwd.h>
 #include <unistd.h>
 
-#define PORT 9674
+#define PORT 9678
 #define BUF_SIZE 1024
 
-void setup_server();
-void handle_connection(int client_sock);
-void handle_client(int client_sock, const char *command);
-void handle_ufile(const char *filename, const char *dest_path, int client_sock);
-void send_to_server(const char *filename, const char *server_ip, int server_port, const char *dest_dir, int client_sock);
-int make_dirs(const char *path);
-void handle_rmfile(const char *filename, int client_sock);
-void send_delete_request(const char *filename, const char *server_ip, int server_port, int client_sock);
-void replace_smain_path(char *path, const char *replacement);
-void retrieve_and_send_file(const char *filename, int client_sock);
-void request_file_from_server(const char *filename, const char *server_ip, int server_port, int client_sock);
-void handle_dfile(const char *filename, int client_sock);
-void request_file_list_from_server(const char *server_ip, int server_port, const char *command, const char *directory, char *file_list);
-void handle_dtar(const char *filetype, int client_sock);
-void handle_display(const char *pathname, int client_sock);
-void expand_tilde(char *path, char *expanded_path, size_t size);
+//Function declarations
+void prcclient();
+void handleClientConnection(int client_sock);
+void handleCommandsfromClient(int client_sock, const char *command);
+void ufileCommandExecution(const char *filename, const char *dest_path, int client_sock);
+void sendFileandPathtoServer(const char *filename, const char *server_ip, int server_port, const char *dest_dir, int client_sock);
+int createDir(const char *path);
+void rmfileCommandExecution(const char *filename, int client_sock);
+void sendRemoveRequesttoServer(const char *filename, const char *server_ip, int server_port, int client_sock);
+void replacesmainPath(char *path, const char *replacement);
+void retrieveAndSendFile(const char *filename, int client_sock);
+void requestFileFromServer(const char *filename, const char *server_ip, int server_port, int client_sock);
+void dfileCommandExecution(const char *filename, int client_sock);
+void requestFileListFromServer(const char *server_ip, int server_port, const char *command, const char *directory, char *file_list);
+void dtarCommandExecution(const char *filetype, int client_sock);
+void displayCommandExecution(const char *pathname, int client_sock);
+void tildePathOperation(char *path, char *expanded_path, size_t size);
+void collectFiles(const char *directory, const char *filetype, char *output);
 
 int main() {
-    setup_server();
+    //Start the server
+    prcclient();
     return 0;
 }
 
 // Function to set up the server and manage incoming connections
-void setup_server() {
+void prcclient() {
     int server_sock, client_sock;
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len = sizeof(struct sockaddr_in);
     pid_t child_pid;
 
-    // Create socket
+    // Create a socket using IPv4 and TCP
     if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Socket creation error");
         exit(EXIT_FAILURE);
     }
 
+    // Set up the address structure for the server
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
@@ -69,7 +79,7 @@ void setup_server() {
     }
 
     printf("Smain server listening on port %d\n", PORT);
-
+    // Infinite loop to accept multiple client connections
     while (1) {
         // Accept a connection
         if ((client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &addr_len)) < 0) {
@@ -79,23 +89,27 @@ void setup_server() {
 
         // Fork a child process to handle the client
         if ((child_pid = fork()) == 0) {
+            // Child process closes listening socket
             close(server_sock);
-            handle_connection(client_sock);
+            // Handle client communication by calling the function
+            handleClientConnection(client_sock);
             close(client_sock);
             exit(0);
         } else if (child_pid < 0) {
             perror("Fork error");
             close(client_sock);
         } else {
+            // Parent process closes client socket
             close(client_sock);
+            // Clean up zombie processes
             waitpid(-1, NULL, WNOHANG);
         }
     }
-
     close(server_sock);
 }
 
-void handle_connection(int client_sock) {
+// Function to handle client connections
+void handleClientConnection(int client_sock) {
     char buffer[BUF_SIZE];
     ssize_t n;
 
@@ -114,24 +128,24 @@ void handle_connection(int client_sock) {
         buffer[n] = '\0';
         printf("Received command: %s\n", buffer);
 
-        // Call handle_client to process the command
-        handle_client(client_sock, buffer);
+        // Call handleCommandsfromClient to process the command
+        handleCommandsfromClient(client_sock, buffer);
     }
 
     // Close the connection when the loop ends (client disconnects)
     close(client_sock);
 }
 
-
-
 // Function to handle a single command from the client
-void handle_client(int client_sock, const char *command) {
+void handleCommandsfromClient(int client_sock, const char *command) {
+    //Getting the command
     char *cmd = strtok((char *)command, "\n");
-
+    //Validation for invalid commands
     if (cmd == NULL) {
         printf("Invalid command\n");
         return;
     }
+    //Option handling for the ufile command
     if (strncmp(cmd, "ufile", 5) == 0) {
         char *received_filename = strtok(NULL, "\n");
         char *received_dest_path = strtok(NULL, "\n");
@@ -139,16 +153,21 @@ void handle_client(int client_sock, const char *command) {
             printf("Invalid ufile command format\n");
             return;  // Exit if the command format is invalid
         }
-        handle_ufile(received_filename, received_dest_path, client_sock);
-    } else if (strncmp(cmd, "rmfile", 6) == 0) {
+        //Calling the function if the validation is successful
+        ufileCommandExecution(received_filename, received_dest_path, client_sock);
+    } 
+    //Option handling for the rmfile command
+    else if (strncmp(cmd, "rmfile", 6) == 0) {
     // Parse the filename after "rmfile "
     char *received_filename = cmd + 7;
     if (!received_filename || strlen(received_filename) == 0) {
         printf("Invalid rmfile command format\n");
         return;
     }
-    handle_rmfile(received_filename, client_sock);
+    //Calling the function if the validation is successful
+    rmfileCommandExecution(received_filename, client_sock);
     }
+    //Option handling for the dfile command
     else if (strncmp(cmd, "dfile", 5) == 0) {
         // Parse the filename after "dfile "
         char *received_filename = cmd + 6;
@@ -156,27 +175,29 @@ void handle_client(int client_sock, const char *command) {
             printf("Invalid dfile command format\n");
             return;
         }
-        handle_dfile(received_filename, client_sock);
+        //Calling the function if the validation is successful
+        dfileCommandExecution(received_filename, client_sock);
     }
+    //Option handling for the dfile command
     else if (strncmp(cmd, "dtar", 4) == 0) {
     char *filetype = cmd + 5;  // Skip the "dtar " part
-    handle_dtar(filetype, client_sock);
+    //Calling the function
+    dtarCommandExecution(filetype, client_sock);
     }
+    //Option handling for the display command
     else if (strncmp(cmd, "display", 7) == 0) {
         char *pathname = cmd + 8;
         if (!pathname || strlen(pathname) == 0) {
             printf("Invalid display command format\n");
             return;
         }
-        handle_display(pathname, client_sock);
-    }
-    else {
-        //handle_other_commands(cmd, client_sock);  // Placeholder for handling other commands
+        //Calling the function if the validation is successful
+        displayCommandExecution(pathname, client_sock);
     }
 }
 
 // Function to handle the "ufile" command
-void handle_ufile(const char *filename, const char *dest_path, int client_sock) {
+void ufileCommandExecution(const char *filename, const char *dest_path, int client_sock) {
     char buffer[BUF_SIZE];
     ssize_t n;
 
@@ -184,8 +205,8 @@ void handle_ufile(const char *filename, const char *dest_path, int client_sock) 
     char *ext = strrchr(filename, '.');
     if (ext) {
         if (strcmp(ext, ".c") == 0) {
-            // Store .c file locally
-            if (make_dirs(dest_path) != 0) {
+            // Creating the directory if it doesnt exists, to store .c files locally
+            if (createDir(dest_path) != 0) {
                 perror("mkdir error");
                 return;
             }
@@ -196,14 +217,14 @@ void handle_ufile(const char *filename, const char *dest_path, int client_sock) 
                 perror("File open error");
                 return;
             }
-
-            // Now receive and write the file data
+            // Receive the file data from client24s and write the data to the file
             while ((n = recv(client_sock, buffer, BUF_SIZE, 0)) > 0) {
                 size_t written = fwrite(buffer, 1, n, file);
                 if (written != n) {
                     perror("fwrite error");
                     break;
                 }
+                // Flush the output buffer
                 fflush(file);
             }
 
@@ -213,42 +234,49 @@ void handle_ufile(const char *filename, const char *dest_path, int client_sock) 
             // Handle .pdf file, modify path and send to Spdf server
             char modified_dest_dir[BUF_SIZE];
             snprintf(modified_dest_dir, BUF_SIZE, "%s", dest_path);
+            // Replacing the smain with spdf before sending it to Spdf server
             char *replace = strstr(modified_dest_dir, "smain");
             if (replace) {
                 memmove(replace + 4, replace + 5, strlen(replace + 5) + 1);
                 strncpy(replace, "spdf", 4);
             }
-            if (make_dirs(modified_dest_dir) != 0) {
+            // Creating the directory if it doesn't exists
+            if (createDir(modified_dest_dir) != 0) {
                 perror("mkdir error");
                 return;
             }
-            send_to_server(filename, "127.0.0.1", 9605, modified_dest_dir, client_sock);
+            // Sending the file and path to Spdf server
+            sendFileandPathtoServer(filename, "127.0.0.1", 9801, modified_dest_dir, client_sock);
 
         } else if (strcmp(ext, ".txt") == 0) {
             // Handle .txt file, modify path and send to Stext server
             char modified_dest_dir[BUF_SIZE];
             snprintf(modified_dest_dir, BUF_SIZE, "%s", dest_path);
+            // Replacing the smain with stext before sending it to Stext server
             char *replace = strstr(modified_dest_dir, "smain");
             if (replace) {
                 memmove(replace + 5, replace + 5, strlen(replace + 5) + 1);
                 strncpy(replace, "stext", 5);
             }
-            if (make_dirs(modified_dest_dir) != 0) {
+            // Creating the directory if it doesn't exists
+            if (createDir(modified_dest_dir) != 0) {
                 perror("mkdir error");
                 return;
             }
-            send_to_server(filename, "127.0.0.1", 9701, modified_dest_dir, client_sock);
+            // Sending the file and path to Stext server
+            sendFileandPathtoServer(filename, "127.0.0.1", 9800, modified_dest_dir, client_sock);
         }
     }
 }
 
-void handle_rmfile(const char *filename, int client_sock) {
+// Function to handle the "rmfile" command, which removes a file from the servers
+void rmfileCommandExecution(const char *filename, int client_sock) {
     char expanded_filename[BUF_SIZE];
     char modified_filename[BUF_SIZE];
     char response[BUF_SIZE];
 
     // Expand ~ to the full home directory path
-    expand_tilde((char *)filename, expanded_filename, BUF_SIZE);
+    tildePathOperation((char *)filename, expanded_filename, BUF_SIZE);
 
     // Check if the file is a .txt file
     if (strstr(expanded_filename, ".txt") != NULL) {
@@ -260,11 +288,12 @@ void handle_rmfile(const char *filename, int client_sock) {
             // Replace "/smain/" with "/stext/"
             snprintf(replace, BUF_SIZE - (replace - modified_filename), "/stext/%s", replace + 7);
         }
-
         // Send the modified path to the Stext server
-        send_delete_request(modified_filename, "127.0.0.1", 9701, client_sock);
+        sendRemoveRequesttoServer(modified_filename, "127.0.0.1", 9800, client_sock);
 
-    } else if (strstr(expanded_filename, ".pdf") != NULL) {
+    }
+    // Check if the file is a .pdf file
+    else if (strstr(expanded_filename, ".pdf") != NULL) {
         // Modify the path to use the "spdf" directory instead of "smain"
         strncpy(modified_filename, expanded_filename, BUF_SIZE);
 
@@ -275,34 +304,35 @@ void handle_rmfile(const char *filename, int client_sock) {
         }
 
         // Send the modified path to the Spdf server
-        send_delete_request(modified_filename, "127.0.0.1", 9605, client_sock);
+        sendRemoveRequesttoServer(modified_filename, "127.0.0.1", 9801, client_sock);
 
-    } else if (strstr(expanded_filename, ".c") != NULL) {
+    }
+    // Check if the file is a .c file
+    else if (strstr(expanded_filename, ".c") != NULL) {
         // Directly delete the .c file from the Smain server
         if (remove(expanded_filename) == 0) {
-            snprintf(response, BUF_SIZE, "File '%s' deleted successfully from Smain server.\n", expanded_filename);
+            snprintf(response, BUF_SIZE, "File is deleted successfully.\n", expanded_filename);
         } else {
             snprintf(response, BUF_SIZE, "File deletion error: %s\n", strerror(errno));
         }
     }
-
     // Send the response to the client
     send(client_sock, response, strlen(response), 0);
 }
 
-
-
-void send_to_server(const char *filename, const char *server_ip, int server_port, const char *dest_dir, int client_sock) {
+// Function to send a file and its path to another server
+void sendFileandPathtoServer(const char *filename, const char *server_ip, int server_port, const char *dest_dir, int client_sock) {
     int sock;
     struct sockaddr_in server_addr;
     char buffer[BUF_SIZE];
     ssize_t n;
 
+    // Create a socket to connect to the other server
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Socket creation error");
         return;
     }
-
+    // Set up the address structure for the other server
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(server_port);
     if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
@@ -310,7 +340,7 @@ void send_to_server(const char *filename, const char *server_ip, int server_port
         close(sock);
         return;
     }
-
+    // Connect to the other servers
     if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("Connection failed");
         close(sock);
@@ -321,15 +351,16 @@ void send_to_server(const char *filename, const char *server_ip, int server_port
     snprintf(buffer, BUF_SIZE, "%s\n%s\n", filename, dest_dir);
     send(sock, buffer, strlen(buffer), 0);
 
-    // Send file data
+    // Send the file data from the client to the servers
     while ((n = recv(client_sock, buffer, BUF_SIZE, 0)) > 0) {
         send(sock, buffer, n, 0);
     }
-
+    // Close the socket to the servers when done
     close(sock);
 }
 
-int make_dirs(const char *path) {
+// Function to create a directory if it does not exist
+int createDir(const char *path) {
     char tmp[BUF_SIZE];
     char *p = NULL;
     size_t len;
@@ -347,23 +378,27 @@ int make_dirs(const char *path) {
             *p = '/';
         }
     }
+    // Create the final directory in the path
     if (mkdir(tmp, 0755) && errno != EEXIST) {
         return -1;
     }
     return 0;
 }
 
-void send_delete_request(const char *filename, const char *server_ip, int server_port, int client_sock) {
+// Function to send a remove request to another server
+void sendRemoveRequesttoServer(const char *filename, const char *server_ip, int server_port, int client_sock) {
     int sock;
     struct sockaddr_in server_addr;
     char buffer[BUF_SIZE];
     ssize_t n;
 
+    // Create a socket to connect to the servers
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Socket creation error");
         return;
     }
 
+    // Set up the address structure for the other server
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(server_port);
     if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
@@ -372,17 +407,18 @@ void send_delete_request(const char *filename, const char *server_ip, int server
         return;
     }
 
+    // Connect to the servers
     if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("Connection failed");
         close(sock);
         return;
     }
 
-    // Send the delete command and filename
+    // Send the rmfile (delete) command and filename to the other server
     snprintf(buffer, BUF_SIZE, "rmfile %s", filename);
     send(sock, buffer, strlen(buffer), 0);
 
-    // Receive the response from the Spdf server
+    // Receive the response from the servers
     while ((n = recv(sock, buffer, BUF_SIZE, 0)) > 0) {
         buffer[n] = '\0';  // Null-terminate the string
         send(client_sock, buffer, n, 0);  // Forward the response to the client
@@ -391,7 +427,8 @@ void send_delete_request(const char *filename, const char *server_ip, int server
     close(sock);
 }
 
-void replace_smain_path(char *path, const char *replacement) {
+// Function to replace part of a file path with a different directory name
+void replacesmainPath(char *path, const char *replacement) {
     char *replace = strstr(path, "/smain/");
     if (replace) {
         memmove(replace + strlen(replacement), replace + strlen("/smain/"), strlen(replace) - strlen("/smain/") + 1);
@@ -399,7 +436,8 @@ void replace_smain_path(char *path, const char *replacement) {
     }
 }
 
-void retrieve_and_send_file(const char *filename, int client_sock) {
+// Function to retrieve a file from the server and send it to the client
+void retrieveAndSendFile(const char *filename, int client_sock) {
     FILE *file = fopen(filename, "rb");
     if (file == NULL) {
         perror("File open error");
@@ -432,17 +470,20 @@ void retrieve_and_send_file(const char *filename, int client_sock) {
     printf("File '%s' sent to client.\n", filename);
 }
 
-void request_file_from_server(const char *filename, const char *server_ip, int server_port, int client_sock) {
+// Function to request a file from servers
+void requestFileFromServer(const char *filename, const char *server_ip, int server_port, int client_sock) {
     int sock;
     struct sockaddr_in server_addr;
     char buffer[BUF_SIZE];
     ssize_t n;
 
+    // Create a socket to connect to the servers
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Socket creation error");
         return;
     }
-
+    
+    // Set up the address structure for the servers
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(server_port);
     if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
@@ -451,13 +492,14 @@ void request_file_from_server(const char *filename, const char *server_ip, int s
         return;
     }
 
+    // Connect to the servers
     if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         printf("Connection closed");
         close(sock);
         return;
     }
 
-    // Send the filename to the server
+    // Send the download request of the filename to the server
     snprintf(buffer, BUF_SIZE, "dfile %s", filename);
     send(sock, buffer, strlen(buffer), 0);
 
@@ -472,8 +514,7 @@ void request_file_from_server(const char *filename, const char *server_ip, int s
     if (n < 0) {
         perror("Receive error from server");
     }
-
-    // Properly shut down the socket after sending all data
+    // Properly shut down the socket after sending all the data
     shutdown(sock, SHUT_WR);  // Ensure the server closes the sending side
     close(sock);
     
@@ -481,39 +522,44 @@ void request_file_from_server(const char *filename, const char *server_ip, int s
     shutdown(client_sock, SHUT_WR);  // Close the writing side of the client socket
 }
 
-
-void handle_dfile(const char *filename, int client_sock) {
+// Function to handle the dfile command, which downloads a file from the servers
+void dfileCommandExecution(const char *filename, int client_sock) {
     char file_path[BUF_SIZE];
     strncpy(file_path, filename, BUF_SIZE);
 
-    // Check the file type and handle accordingly
+    // Check if the file type is .c
     if (strstr(file_path, ".c") != NULL) {
-            // Check if the file/folder exists before proceeding
+        // Check if the file/folder exists before proceeding
         if (access(file_path, F_OK) == -1) {
         char response[BUF_SIZE];
         snprintf(response, BUF_SIZE, "Error: File/Directory does not exist.\n");
+        //Sending the response to client if the file/directory doesnt exists.
         send(client_sock, response, strlen(response), 0);
-
         // Properly shut down the write side of the socket to signal the end of the communication
         shutdown(client_sock, SHUT_WR);
         return;
         }
         // Process .c file locally
-        retrieve_and_send_file(file_path, client_sock);
-    } else if (strstr(file_path, ".txt") != NULL) {
+        retrieveAndSendFile(file_path, client_sock);
+    }
+    // Check if the file type is .txt
+    else if (strstr(file_path, ".txt") != NULL) {
         // Replace smain with stext and request the file from Stext
-        replace_smain_path(file_path, "/stext/");
-        request_file_from_server(file_path, "127.0.0.1", 9701, client_sock);
-    } else if (strstr(file_path, ".pdf") != NULL) {
+        replacesmainPath(file_path, "/stext/");
+        requestFileFromServer(file_path, "127.0.0.1", 9800, client_sock);
+    } 
+    // Check if the file type is .pdf
+    else if (strstr(file_path, ".pdf") != NULL) {
         // Replace smain with spdf and request the file from Spdf
-        replace_smain_path(file_path, "/spdf/");
-        request_file_from_server(file_path, "127.0.0.1", 9605, client_sock);
+        replacesmainPath(file_path, "/spdf/");
+        requestFileFromServer(file_path, "127.0.0.1", 9801, client_sock);
     } else {
         printf("Unsupported file type\n");
     }
 }
 
-void handle_dtar(const char *filetype, int client_sock) {
+// Function to handle the "dtar" command, which sends a tar archive of files to the client
+void dtarCommandExecution(const char *filetype, int client_sock) {
     char command[BUF_SIZE];
     char cwd[BUF_SIZE];
     int pipefd[2];
@@ -528,10 +574,9 @@ void handle_dtar(const char *filetype, int client_sock) {
 
     // Construct the path to smain under the home directory
     snprintf(cwd, sizeof(cwd), "%s/smain", home);
-
+    // Check if the file type is .c
     if (strcmp(filetype, ".c") == 0) {
         // Handle .c file type by creating a tar archive and sending it directly to the client
-
         // Create a pipe to connect the tar output to the socket
         if (pipe(pipefd) == -1) {
             perror("pipe error");
@@ -551,7 +596,7 @@ void handle_dtar(const char *filetype, int client_sock) {
             dup2(pipefd[1], STDOUT_FILENO);
             close(pipefd[1]);
 
-            // Create tar of .c files in smain directory on the fly and output it to stdout
+            // Create tar of .c files in smain directory and output it to stdout
             snprintf(command, BUF_SIZE, "cd %s && tar -cvf - $(find . -type f -name '*.c')", cwd);
 
             // Execute the tar command
@@ -574,11 +619,9 @@ void handle_dtar(const char *filetype, int client_sock) {
                     break;
                 }
             }
-
             if (n < 0) {
                 perror("read error");
             }
-
             close(pipefd[0]);  // Close the read end of the pipe
             wait(NULL);  // Wait for the child process to finish
         }
@@ -587,14 +630,18 @@ void handle_dtar(const char *filetype, int client_sock) {
         shutdown(client_sock, SHUT_WR);
         printf("Tar file sent to client.\n");
 
-    } else if (strcmp(filetype, ".pdf") == 0) {
+    } 
+    // Check if the file type is .pdf
+    else if (strcmp(filetype, ".pdf") == 0) {
         // Handle .pdf file type by requesting the tar archive from Spdf server and sending it to the client
-        request_file_from_server("pdf.tar", "127.0.0.1", 9605, client_sock);
+        requestFileFromServer("pdf.tar", "127.0.0.1", 9801, client_sock);
         printf("The .pdf tar file received from the Spdf server has been forwarded to the client.\n");
 
-    } else if (strcmp(filetype, ".txt") == 0) {
+    } 
+    // Check if the file type is .txt
+    else if (strcmp(filetype, ".txt") == 0) {
         // Handle .txt file type by requesting the tar archive from Stext server and sending it to the client
-        request_file_from_server("text.tar", "127.0.0.1", 9701, client_sock);
+        requestFileFromServer("text.tar", "127.0.0.1", 9800, client_sock);
         printf("The .txt tar file received from the Stext server has been forwarded to the client.\n");
 
     } else {
@@ -602,18 +649,19 @@ void handle_dtar(const char *filetype, int client_sock) {
     }
 }
 
-
-void request_file_list_from_server(const char *server_ip, int server_port, const char *command, const char *subdir, char *file_list) {
+// Function to request a list of files from servers
+void requestFileListFromServer(const char *server_ip, int server_port, const char *command, const char *subdir, char *file_list) {
     int sock;
     struct sockaddr_in server_addr;
     char buffer[BUF_SIZE];
     ssize_t n;
 
+    // Create a socket to connect to servers
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Socket creation error");
         return;
     }
-
+    // Set up the address structure for the servers
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(server_port);
     if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
@@ -621,18 +669,18 @@ void request_file_list_from_server(const char *server_ip, int server_port, const
         close(sock);
         return;
     }
-
+    // Connect to the servers
     if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("Connection failed");
         close(sock);
         return;
     }
 
-    // Send the display command with the directory path
+    // Send the display command with the directory path to the servers
     snprintf(buffer, BUF_SIZE, "%s %s", command, subdir);
     send(sock, buffer, strlen(buffer), 0);
 
-    // Receive the file list from the server and append it to file_list
+    // Receive the file list from the servers and append it to file_list
     while ((n = recv(sock, buffer, BUF_SIZE, 0)) > 0) {
         buffer[n] = '\0';  // Ensure null-terminated string
         strcat(file_list, buffer);
@@ -641,18 +689,21 @@ void request_file_list_from_server(const char *server_ip, int server_port, const
     close(sock);
 }
 
-
-void collect_files(const char *directory, const char *filetype, char *output) {
+// Function to collect files of a specific type from a directory
+void collectFiles(const char *directory, const char *filetype, char *output) {
     char cmd[BUF_SIZE];
     FILE *fp;
 
-    snprintf(cmd, sizeof(cmd), "find %s -type f -name '*%s'", directory, filetype);
+    // Construct the find command to find files of the specified type in the directory
+    snprintf(cmd, sizeof(cmd), "find %s -type f -name '*%s'", directory, filetype); 
+
+    // Execute the command and open a pipe to read its output
     fp = popen(cmd, "r");
     if (fp == NULL) {
         perror("Failed to run command");
         return;
     }
-
+    // Read the output of the command and append it to the output buffer
     while (fgets(cmd, sizeof(cmd), fp) != NULL) {
         strcat(output, cmd);
     }
@@ -660,7 +711,7 @@ void collect_files(const char *directory, const char *filetype, char *output) {
     pclose(fp);
 }
 
-void handle_display(const char *pathname, int client_sock) {
+void displayCommandExecution(const char *pathname, int client_sock) {
     char c_files[BUF_SIZE * 10] = {0};  // Buffer for .c files
     char pdf_files[BUF_SIZE * 10] = {0};  // Buffer for .pdf files
     char txt_files[BUF_SIZE * 10] = {0};  // Buffer for .txt files
@@ -669,7 +720,7 @@ void handle_display(const char *pathname, int client_sock) {
     char stext_path[BUF_SIZE];
 
     // Collect .c files from the provided directory
-    collect_files(pathname, ".c", c_files);
+    collectFiles(pathname, ".c", c_files);
 
     // Copy the original path to spdf_path and handle both "/smain" and "/smain/"
     strncpy(spdf_path, pathname, sizeof(spdf_path));
@@ -688,7 +739,7 @@ void handle_display(const char *pathname, int client_sock) {
     printf("Transformed path to send to Spdf: %s\n", spdf_path);
 
     // Collect .pdf files from Spdf directory
-    request_file_list_from_server("127.0.0.1", 9605, "display", spdf_path, pdf_files);
+    requestFileListFromServer("127.0.0.1", 9801, "display", spdf_path, pdf_files);
 
     // Copy the original path to stext_path and handle both "/smain" and "/smain/"
     strncpy(stext_path, pathname, sizeof(stext_path));
@@ -707,7 +758,7 @@ void handle_display(const char *pathname, int client_sock) {
     printf("Transformed path to send to Stext: %s\n", stext_path);
 
     // Collect .txt files from Stext directory
-    request_file_list_from_server("127.0.0.1", 9701, "display", stext_path, txt_files);
+    requestFileListFromServer("127.0.0.1", 9800, "display", stext_path, txt_files);
 
     // Combine all lists into one
     strcat(combined_files, c_files);
@@ -722,7 +773,7 @@ void handle_display(const char *pathname, int client_sock) {
 }
 
 // Function to expand ~ to the user's home directory
-void expand_tilde(char *path, char *expanded_path, size_t size) {
+void tildePathOperation(char *path, char *expanded_path, size_t size) {
     if (path[0] == '~') {
         const char *home_dir = getenv("HOME");
         if (!home_dir) {
